@@ -6,20 +6,22 @@ The headline: the official OKF repo ships a *producer* (a Gemini/BigQuery enrich
 
 > No Gemini, Google Cloud, BigQuery, paid service, or account required. Pure Python 3.8+ standard library. Plain Markdown, YAML frontmatter, standard Markdown links, Git-friendly.
 
-## Why this exists
+## Highlights
 
-| | This skill | [scaccogatto/okf-skills](https://github.com/scaccogatto/okf-skills) | [fabricioctelles okf skill](https://github.com/fabricioctelles/skills/tree/main/skills/okf-open-knowledge-format) | Official `okf/` |
-|---|---|---|---|---|
-| Deterministic validator | ✅ zero-dep, py3.8+ | ✅ (needs PyYAML) | ⚠️ bash, crashes on missing `type` | ❌ none |
-| Hard error vs lint split | ✅ E / W / Q tiers | ✅ E / W | ✅ E / W (under-implemented) | ❌ |
-| §9.3 reserved-file teeth (`E008`) | ✅ ISO log dates enforced | ⚠️ warning only | ⚠️ half | ❌ |
-| Over-rejection safe (folded scalars) | ✅ fails open, tested vs PyYAML | ❌ PyYAML-dependent verdict | ❌ greps `^type:` | n/a |
-| Progressive disclosure at runtime | ✅ `okf context` selector | ✅ consume mode | ❌ dumps whole bundle | n/a |
-| Deterministic migrate (md/wiki→OKF) | ✅ `okf migrate` + wikilinks | ❌ | ⚠️ prose playbooks only | ❌ |
-| Offline visualizer | ✅ vanilla JS, no CDN | ⚠️ CDN (needs network) | ❌ | ⚠️ CDN |
-| Tests / CI | ✅ 73 tests, parser-equivalence, negative corpus | ✅ (no viz coverage) | ⚠️ minimal | ✅ (no validator — none exists) |
-
-Full write-up: **[docs/COMPARISON.md](docs/COMPARISON.md)**.
+- **Deterministic, zero-dependency validator** (pure Python 3.8+ standard library) with a strict
+  two-tier model: hard OKF v0.1 conformance **errors** are kept separate from optional lint
+  **warnings**, plus an opt-in project-quality tier.
+- **Bias toward acceptance.** A zero-dependency YAML mini-parser whose accept/reject verdict is
+  tested to match PyYAML on real bundles, so it never over-rejects spec-conformant content
+  (multi-line folded scalars, scalar `tags`, relative links, unknown `type` values).
+- **Full toolchain** behind one `okf.py` CLI: scaffold (`new`), maintain indexes (`index`),
+  progressive-disclosure context packs (`context`), an **offline** link-graph visualizer
+  (`graph`, no CDN/backend), and Markdown/wiki → OKF migration with `[[wikilink]]` resolution
+  (`migrate`).
+- **A real skill set:** an `okf` SKILL.md, slash commands, and reference docs, packaged as an
+  installable Claude Code plugin.
+- **Tested:** parser↔PyYAML equivalence, a negative corpus (one bundle per error code), and CI
+  on a Python 3.8 + 3.12 matrix.
 
 ## Quickstart
 
@@ -106,7 +108,7 @@ examples/
 ├── valid/permissive-quirks/     conformant DESPITE quirks (proves leniency)
 └── invalid/E001…E008/           one minimal bundle per error code (negative corpus)
 tests/                           pytest: validator, tools, examples, parser↔PyYAML equivalence
-docs/                            COMPARISON.md · DESIGN.md
+docs/                            DESIGN.md (design rationale + boundary calls)
 .github/workflows/ci.yml         3.8 + 3.12 matrix
 ```
 
