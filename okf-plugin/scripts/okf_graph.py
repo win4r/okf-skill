@@ -189,6 +189,8 @@ def _esc(s: str) -> str:
 
 
 def run(args) -> int:
+    if not os.path.isdir(args.path):
+        raise NotADirectoryError("bundle path is not a directory: %s" % args.path)
     bundle = core.load_bundle(args.path)
     graph = build_graph(bundle)
     title = args.title or os.path.basename(os.path.abspath(args.path)) or "OKF Bundle"

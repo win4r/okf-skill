@@ -106,7 +106,7 @@ def _collect_slugmap(src: str) -> Dict[str, str]:
     slugmap: Dict[str, str] = {}
     for dirpath, dirnames, filenames in os.walk(src):
         dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        for fn in filenames:
+        for fn in sorted(filenames):  # deterministic slug-collision winner across filesystems
             if not fn.endswith(".md"):
                 continue
             if fn in ("index.md", "log.md"):

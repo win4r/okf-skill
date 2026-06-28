@@ -49,6 +49,12 @@ CORPUS = [
     "{type: T, tags: [a, b], meta: {x: 1}}",
     # multi-line flow mapping
     "{type: Table,\n title: Foo}",
+    # leading-zero "ints" that PyYAML keeps as STRINGS (must NOT coerce -> no E005 over-rejection)
+    "type: 09\nbuild: 08\nrev: 019",
+    # underscored decimal int + plain int + zero
+    "count: 1_000\nn: 0\nm: 42",
+    # mapping-valued key (PyYAML -> dict; mini must also yield non-string)
+    "title: A\ntype:\n  name: T\n  schema: pub",
 ]
 
 

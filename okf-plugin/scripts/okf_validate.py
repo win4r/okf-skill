@@ -18,6 +18,7 @@ import posixpath
 import re
 import sys
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import okf_core as core
@@ -105,13 +106,22 @@ class ProjectConfig:
         with open(path, "r", encoding="utf-8") as fh:
             data, _ = core.parse_frontmatter(fh.read())
         data = data or {}
+        # Fail open: a malformed optional Tier-3 config must degrade to defaults, never crash
+        # the (Tier-1) conformance verdict to exit 2.
         return cls(
             profile=str(data.get("profile", "conformance")),
             types=list(data["types"]) if isinstance(data.get("types"), list) else None,
-            concrete_types=list(data.get("concrete_types") or []),
-            description_max_chars=int(data.get("description_max_chars") or 0),
-            stale_after_days=int(data.get("stale_after_days") or 0),
+            concrete_types=list(data["concrete_types"]) if isinstance(data.get("concrete_types"), list) else [],
+            description_max_chars=_safe_int(data.get("description_max_chars"), 0),
+            stale_after_days=_safe_int(data.get("stale_after_days"), 0),
         )
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 # --------------------------------------------------------------------------- #
@@ -275,7 +285,13 @@ def _check_index(doc, res):
 def _check_log(doc, res):
     add = res.findings.append
     dates: List[str] = []
+    in_fence = False
     for lineno, line in enumerate(doc.text.split("\n"), start=1):
+        if core.FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue  # a '## ...' line inside a code fence is not a heading
         m = LOG_HEADING_RE.match(line)
         if not m:
             continue
@@ -339,6 +355,22 @@ def _check_quality(doc, bundle, res, cfg: ProjectConfig):
     if isinstance(t, str) and t in cfg.concrete_types and not fm.get("resource"):
         add(Finding("quality", "Q004", "missing-resource", doc.rel_path,
                     f"Concrete type {t!r} has no 'resource' URI."))
+    # Q005: timestamp older than the configured max age (guarded date parse — never crash).
+    if cfg.stale_after_days:
+        ts = fm.get("timestamp")
+        d = _parse_iso_date(ts) if isinstance(ts, str) else None
+        if d is not None:
+            age = (datetime.now(timezone.utc).date() - d).days
+            if age > cfg.stale_after_days:
+                add(Finding("quality", "Q005", "stale-timestamp", doc.rel_path,
+                            f"timestamp {ts!r} is {age} days old (> {cfg.stale_after_days})."))
+
+
+def _parse_iso_date(value: str):
+    try:
+        return datetime.strptime(value.strip()[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
 
 
 def _has_inbound(target_doc, bundle) -> bool:

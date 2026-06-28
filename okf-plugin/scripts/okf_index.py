@@ -115,6 +115,9 @@ def _all_dirs(bundle: core.Bundle) -> List[str]:
 
 
 def run(args) -> int:
+    if not os.path.isdir(args.path):
+        # fail fast on a typo'd path instead of materializing a new directory tree on --write
+        raise NotADirectoryError("bundle path is not a directory: %s" % args.path)
     bundle = core.load_bundle(args.path)
     targets = _all_dirs(bundle) if args.recursive else [args.dir.strip("/") if args.dir else ""]
 

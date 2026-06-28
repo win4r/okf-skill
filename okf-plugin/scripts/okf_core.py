@@ -35,8 +35,44 @@ ISO8601_RE = re.compile(
 )
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# --- YAML 1.1 implicit-scalar resolvers (mirror PyYAML's core schema) ---------
+# Used so the mini-parser coerces ONLY what PyYAML coerces (no over-rejection), and the
+# producer emitter (emit_scalar) quotes anything PyYAML would resolve to a non-string.
+_YAML_BOOL_RE = re.compile(r"^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$")
+_YAML_NULL_RE = re.compile(r"^(?:~|null|Null|NULL)$")
+# int: binary, octal (leading 0 OR 0o), decimal (no leading-zero ambiguity), hex, sexagesimal
+_YAML_INT_RE = re.compile(
+    r"^(?:[-+]?0b[0-1_]+|[-+]?0o?[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)"
+    r"|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)$"
+)
+_YAML_FLOAT_RE = re.compile(
+    r"^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+]?[0-9]+)?"
+    r"|[-+]?\.[0-9][0-9_]*(?:[eE][-+]?[0-9]+)?"
+    r"|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*"
+    r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+)
+# decimal-only int (the form that actually appears bare in yaml.safe_dump output)
+_DECIMAL_INT_RE = re.compile(r"^[-+]?(?:0|[1-9][0-9_]*)$")
+_DECIMAL_FLOAT_RE = re.compile(r"^[-+]?[0-9][0-9_]*\.[0-9_]+$")
+
+
+def _yaml_implicit_nonstring(s: str) -> bool:
+    """True if PyYAML's YAML 1.1 resolver would read bare ``s`` as a non-string
+    (bool/null/int/float/timestamp). Used to decide producer quoting."""
+    if not isinstance(s, str) or s == "":
+        return s == ""
+    return bool(
+        _YAML_BOOL_RE.match(s) or _YAML_NULL_RE.match(s)
+        or _YAML_INT_RE.match(s) or _YAML_FLOAT_RE.match(s)
+        or ISO8601_RE.match(s)
+    )
+
+
 # Markdown inline link: [text](target).  Skips images (![...]).
 LINK_RE = re.compile(r"(?<!\!)\[(?P<text>[^\]]*)\]\((?P<target>[^)\s]+)(?:\s+\"[^\"]*\")?\)")
+# Fenced code block delimiter (``` or ~~~), used to skip code when extracting links.
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+CODE_SPAN_RE = re.compile(r"(`+)(?:.*?)\1")
 
 
 # --------------------------------------------------------------------------- #
@@ -180,15 +216,17 @@ def _scalar(token: str) -> Any:
         return True
     if low == "false":
         return False
-    # numbers (but not version-like or date-like tokens with extra chars)
-    if re.fullmatch(r"[+-]?\d+", t):
+    # numbers — match PyYAML's DECIMAL resolver only (the form that appears bare in
+    # yaml.safe_dump output). A leading-zero token like 09 is NOT a decimal int in YAML 1.1,
+    # so it must stay a STRING (coercing it to int 9 was a cardinal-rule over-rejection).
+    if _DECIMAL_INT_RE.match(t):
         try:
-            return int(t)
+            return int(t.replace("_", ""))
         except ValueError:
             return t
-    if re.fullmatch(r"[+-]?\d+\.\d+", t):
+    if _DECIMAL_FLOAT_RE.match(t):
         try:
-            return float(t)
+            return float(t.replace("_", ""))
         except ValueError:
             return t
     return t
@@ -240,17 +278,22 @@ def _brace_balance(s: str) -> int:
     return depth
 
 
-def _flow_value(val: str) -> Any:
+_FLOW_MAX_DEPTH = 64  # bound mutual recursion so a pathological nested flow map can't blow the stack
+
+
+def _flow_value(val: str, depth: int = 0) -> Any:
     """Parse a flow value: a nested list, a nested map, or a scalar."""
     val = val.strip()
+    if depth >= _FLOW_MAX_DEPTH:
+        return val  # too deeply nested -> keep raw (fail open)
     if val.startswith("[") and val.endswith("]"):
         return _flow_list(val)
     if val.startswith("{") and val.endswith("}"):
-        return dict(_flow_map_pairs(val))
+        return dict(_flow_map_pairs(val, depth + 1))
     return _scalar(val)
 
 
-def _flow_map_pairs(token: str):
+def _flow_map_pairs(token: str, depth: int = 0):
     """Parse a single flow mapping `{k: v, k2: v2}` into (key, value) pairs (best effort)."""
     inner = token.strip()[1:-1].strip()
     pairs = []
@@ -263,7 +306,7 @@ def _flow_map_pairs(token: str):
             k = ps[:s].strip()
             if (k[:1] in "\"'") and k[-1:] == k[:1] and len(k) >= 2:
                 k = k[1:-1]
-            pairs.append((k, _flow_value(ps[s + 1:].strip())))
+            pairs.append((k, _flow_value(ps[s + 1:].strip(), depth)))
     return pairs
 
 
@@ -298,7 +341,12 @@ def _list_item_lines(lines: List[str], start: int) -> Tuple[Optional[List[Any]],
 
 
 def _gather_indented(lines: List[str], start: int) -> Tuple[List[str], int]:
-    """Collect a block of more-indented (or blank) lines. Returns (stripped_lines, next)."""
+    """Collect a block of more-indented (or blank) lines. Returns (stripped_lines, next).
+
+    Comments are NOT stripped here: these continuation lines are the *content* of a block
+    scalar (|/>) or a multi-line quoted/folded value, where a leading '#' is real text, so
+    stripping it would corrupt the value (and could lose a closing quote -> over-rejection).
+    """
     out: List[str] = []
     j = start
     n = len(lines)
@@ -310,7 +358,7 @@ def _gather_indented(lines: List[str], start: int) -> Tuple[List[str], int]:
             continue
         if _indent(ln) == 0:
             break
-        out.append(_strip_comment(ln).strip())
+        out.append(ln.strip())
         j += 1
     while out and out[-1] == "":
         out.pop()
@@ -360,7 +408,7 @@ def parse_yaml_mini(raw: str, _retry: bool = False) -> Tuple[Optional[Dict[str, 
             j = i
             while _brace_balance(buf) > 0 and j + 1 < n:
                 j += 1
-                buf += " " + _strip_comment(lines[j]).strip()
+                buf += " " + lines[j].strip()  # do not strip '#': may be inside a quoted value
             for k, v in _flow_map_pairs(buf):
                 result[k] = v
             i = j + 1
@@ -383,8 +431,14 @@ def parse_yaml_mini(raw: str, _retry: bool = False) -> Tuple[Optional[Dict[str, 
                 i = j
                 continue
             block, j = _gather_indented(lines, i + 1)
-            if block:
-                # nested map or indented multi-line plain scalar -> fold to a string (best effort)
+            if block and _find_key_sep(block[0]) >= 0:
+                # an indented block whose first line has a key separator is a nested MAPPING
+                # (valid yaml.safe_dump output) -> represent as a dict so a mapping-valued
+                # `type` correctly trips E005, matching PyYAML.
+                nested, _err = parse_yaml_mini("\n".join(block))
+                result[key] = nested if isinstance(nested, dict) else {}
+            elif block:
+                # indented multi-line plain scalar -> fold to a string (best effort)
                 result[key] = " ".join(b for b in block if b)
             else:
                 result[key] = None
@@ -401,8 +455,13 @@ def parse_yaml_mini(raw: str, _retry: bool = False) -> Tuple[Optional[Dict[str, 
             result[key] = _flow_list(value_part)
             i += 1
             continue
+        if value_part.startswith("{") and value_part.endswith("}"):
+            # value-position flow mapping (type: {a: b}) -> dict, so a mapping `type` trips E005
+            result[key] = dict(_flow_map_pairs(value_part))
+            i += 1
+            continue
         if value_part.startswith("{"):
-            result[key] = value_part  # flow mapping unmodeled -> keep raw (fail open)
+            result[key] = value_part  # unterminated/odd flow mapping -> keep raw (fail open)
             i += 1
             continue
 
@@ -436,7 +495,11 @@ def parse_frontmatter(raw: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
     PyYAML at runtime — so conformance is reproducible on any stdlib-only interpreter. A
     CI test asserts the mini-parser's accept/reject verdict matches PyYAML on real bundles.
     """
-    data, err = parse_yaml_mini(raw)
+    try:
+        data, err = parse_yaml_mini(raw)
+    except RecursionError:
+        # pathological deeply-nested input -> fail open for THIS file (don't abort the run)
+        return None, "frontmatter too deeply nested"
     if err:
         return None, err
     return data, None
@@ -468,10 +531,24 @@ class Link:
         return self.target.startswith("/")
 
 
+def _strip_code_spans(line: str) -> str:
+    """Blank out inline code spans (`...`) so links inside them are not extracted."""
+    return CODE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), line)
+
+
 def extract_links(body: str) -> List[Link]:
+    """Extract Markdown links, skipping fenced code blocks and inline code spans (a link
+    shown as a code EXAMPLE is not a real cross-link, so it must not produce a broken-link
+    warning)."""
     links: List[Link] = []
+    in_fence = False
     for lineno, line in enumerate(body.split("\n"), start=1):
-        for m in LINK_RE.finditer(line):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        for m in LINK_RE.finditer(_strip_code_spans(line)):
             links.append(Link(m.group("text"), m.group("target"), lineno))
     return links
 
@@ -588,15 +665,39 @@ def is_iso_date(value: Any) -> bool:
 
 # --------------------------------------------------------------------------- #
 # Frontmatter serialization (shared by okf_new and okf_migrate so producer output is
-# round-trip-safe: a value never re-parses to a different value/type than intended).
+# round-trip-safe: a value never re-parses to a different value/type than intended, and is
+# always parseable by a standard YAML reader).
 # --------------------------------------------------------------------------- #
-# YAML 1.1 implicit boolean/null tokens — PyYAML resolves these to bool/None, so a string
-# that looks like one must be quoted to stay a string for any consumer.
-_YAML_BOOLISH = {"true", "false", "yes", "no", "on", "off", "y", "n", "null", "none", "~"}
+def _has_control(s: str) -> bool:
+    return any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+
+def _quote_double(s: str) -> str:
+    """Double-quote a scalar, escaping backslash, quote, and C0/DEL control chars so the
+    result is parseable by a standard YAML reader (which rejects raw control bytes)."""
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif o < 0x20 or o == 0x7f:
+            out.append("\\x%02x" % o)
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
 
 
 def emit_scalar(value: Any, in_flow: bool = False) -> str:
-    """Serialize a scalar for frontmatter, quoting whenever bare YAML would be re-typed."""
+    """Serialize a scalar for frontmatter, quoting whenever bare YAML would be re-typed,
+    mis-parsed, or rejected by a standard YAML reader. Over-quoting is always safe."""
     if value is None:
         return "null"
     if value is True:
@@ -608,16 +709,14 @@ def emit_scalar(value: Any, in_flow: bool = False) -> str:
     needs = (
         value == ""
         or value.strip() != value
-        or value[:1] in "[{!&*#?|>@`\"'%,-"
-        or ": " in value
-        or " #" in value
-        or value.lower() in _YAML_BOOLISH
-        or _scalar(value) != value                       # numeric-looking -> would re-type
+        or value[:1] in "[]{}!&*#?|>@`\"'%,:-"   # leading YAML indicator (incl ] } :)
+        or value[-1:] == ":"
+        or ": " in value or " #" in value
+        or _has_control(value)                    # tab/CR/etc. -> bare YAML is unparseable
+        or _yaml_implicit_nonstring(value)        # bool/null/int/float/timestamp -> re-typed
         or (in_flow and any(c in value for c in ",[]{}"))  # flow-list/map separators
     )
-    if needs:
-        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return value
+    return _quote_double(value) if needs else value
 
 
 def emit_fm(key: str, value: Any) -> List[str]:

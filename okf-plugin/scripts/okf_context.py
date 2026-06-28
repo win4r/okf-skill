@@ -18,7 +18,9 @@ from typing import Dict, List, Optional, Tuple
 
 import okf_core as core
 
-_WORD = re.compile(r"[A-Za-z0-9_]+")
+# Unicode-aware (\w in Python 3 str mode matches CJK / accented letters), so a non-Latin
+# query (e.g. a Chinese knowledge base) still tokenizes and scores.
+_WORD = re.compile(r"\w+", re.UNICODE)
 
 FIELD_WEIGHTS = {"title": 5, "type": 3, "tags": 3, "path": 2, "description": 2, "body": 1}
 
@@ -79,9 +81,15 @@ def select(bundle: core.Bundle, query: str, max_concepts: int, hops: int) -> Tup
     scored.sort(key=lambda sd: (-sd[0], sd[1].rel_path))
     primary = [d for _, d in scored[:max_concepts]]
     primary_paths = {d.rel_path for d in primary}
-    related_paths = set()
-    if hops >= 1 and primary_paths:
-        related_paths = neighbors(bundle, primary_paths)
+    # True N-hop expansion: accumulate neighbors-of-the-frontier `hops` times.
+    related_paths: set = set()
+    frontier = set(primary_paths)
+    for _ in range(max(0, hops)):
+        new = neighbors(bundle, primary_paths | related_paths | frontier) - primary_paths - related_paths
+        if not new:
+            break
+        related_paths |= new
+        frontier = new
     by_path = {d.rel_path: d for d in bundle.concepts}
     related = [by_path[p] for p in sorted(related_paths) if p in by_path]
     return primary, set(d.rel_path for d in related), related
@@ -160,6 +168,8 @@ def _first_para(body: str) -> str:
 
 
 def run(args) -> int:
+    if not os.path.isdir(args.path):
+        raise NotADirectoryError("bundle path is not a directory: %s" % args.path)
     bundle = core.load_bundle(args.path)
     if not args.query:
         if args.format == "json":

@@ -35,7 +35,7 @@ A bundle with any of these is **non-conformant**. Each maps to a §9 clause.
 | `E005` | `type-empty` | `type` is present but null, empty/whitespace-only, or not a scalar string. | §9 |
 | `E006` | `index-has-frontmatter` | A **non-root** `index.md` contains a frontmatter block (reserved files carry none). | §9 / §6 |
 | `E007` | `file-not-utf8` | A `.md` file is not decodable as UTF-8. | §3 |
-| `E008` | `log-date-not-iso` | A `log.md` `##` heading's **leading date-shaped token** (with a 4-digit year, e.g. `05/22/2026`) is not a valid `YYYY-MM-DD`. §7's explicit MUST, enforced via §9 rule 3 — the gap both reference skills left as a warning. A valid ISO date followed by a title separated by **whitespace or punctuation** (`## 2026-05-01 Sprint planning`, `## 2026-05-01: Release`) is **accepted**; numeric prose (`## 3-2-1 launch`) is ignored. | §9 / §7 |
+| `E008` | `log-date-not-iso` | A `log.md` `##` heading's **leading date-shaped token** (with a 4-digit year, e.g. `05/22/2026`) is not a valid `YYYY-MM-DD`. §7's explicit MUST, enforced via §9 rule 3 — the gap both reference skills left as a warning. A valid ISO date followed by a title separated by **whitespace or punctuation** (`## 2026-05-01 Sprint planning`, `## 2026-05-01: Release`) is **accepted**; numeric prose (`## 3-2-1 launch`) and any `##` line inside a fenced code block are ignored. | §9 / §7 |
 
 **Concept vs reserved.** `index.md` and `log.md` are reserved (never checked for `type`). Every
 other `.md` is a concept. **Default-ignored** repo housekeeping (not concepts): `README.md`,
@@ -52,7 +52,7 @@ other `.md` is a concept. **Default-ignored** repo housekeeping (not concepts): 
 | `W002` | `missing-description` | Concept has no `description`. | §4 |
 | `W003` | `missing-timestamp` | Concept has no `timestamp`. | §4 |
 | `W004` | `timestamp-not-iso8601` | `timestamp` is not an ISO 8601 date/datetime. | §4 |
-| `W005` | `broken-link` | A bundle-relative link points at a file that does not exist. **Always** a warning — §5.3 says consumers MUST tolerate broken links (may be not-yet-written knowledge). | §5.3 |
+| `W005` | `broken-link` | A bundle-relative link points at a file that does not exist. **Always** a warning — §5.3 says consumers MUST tolerate broken links. Links inside fenced/inline code are ignored (they are examples, not cross-links). | §5.3 |
 | `W007` | `missing-root-index` | The bundle root has no `index.md`. | §6 |
 | `W009` | `log-not-newest-first` | `log.md` date headings are not in descending order (softer than the ISO MUST). | §7 |
 | `W010` | `root-index-extra-frontmatter` | Root `index.md` frontmatter carries keys other than `okf_version`. A deliberate boundary call: a warning, aligning with §9's "tolerate unknown keys." | §11 |

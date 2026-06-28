@@ -22,7 +22,9 @@ run() { python3 "$OKF_CLI" "$@"; }
 #    Drop --strict if you do NOT want warnings to block commits.
 run validate "$OKF_BUNDLE" --strict
 
-# 2. Indexes must be up to date (regenerate with: okf index <bundle> --recursive --write).
-run index "$OKF_BUNDLE" --recursive --check
+# 2. Index freshness — ADVISORY only (does not block the commit). The generator produces a
+#    flat listing, so a richer hand-authored index.md is legitimately "stale" against it.
+#    If you manage indexes with `okf index --write`, change `|| true` to nothing to enforce.
+run index "$OKF_BUNDLE" --recursive --check || echo "pre-commit: note — some index.md files differ from the generator (advisory)"
 
-echo "pre-commit: OKF bundle is conformant and indexes are current ✓"
+echo "pre-commit: OKF bundle is conformant ✓"
