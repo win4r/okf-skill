@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Pre-commit guard for THIS repo: the example bundles must stay conformant and the
+# test suite green. Activated via `git config core.hooksPath .githooks` (see README).
+# Zero dependencies beyond Python 3.8+ (pytest is optional and skipped if absent).
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+OKF=(python3 "$ROOT/okf-plugin/scripts/okf.py")
+
+echo "pre-commit: validating example bundles…"
+
+# The golden bundle must pass --strict (zero warnings).
+"${OKF[@]}" validate "$ROOT/examples/valid/acme-analytics" --strict --no-color
+
+# The permissive-quirks bundle must stay conformant (warnings allowed).
+"${OKF[@]}" validate "$ROOT/examples/valid/permissive-quirks" --no-color >/dev/null
+
+# Every invalid bundle must stay rejected (negative corpus).
+for d in "$ROOT"/examples/invalid/*/; do
+  if "${OKF[@]}" validate "$d" --no-color >/dev/null 2>&1; then
+    echo "pre-commit: ERROR — $(basename "$d") unexpectedly passed validation" >&2
+    exit 1
+  fi
+done
+
+# Run the test suite if pytest is available (instant; <0.1s).
+if python3 -m pytest --version >/dev/null 2>&1; then
+  python3 -m pytest "$ROOT/tests" -q >/dev/null
+else
+  echo "pre-commit: pytest not installed — skipping test run"
+fi
+
+echo "pre-commit: OKF checks passed ✓"

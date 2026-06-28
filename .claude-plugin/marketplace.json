@@ -1,0 +1,17 @@
+{
+  "name": "okf-skill",
+  "owner": {
+    "name": "OKF-Skill contributors"
+  },
+  "metadata": {
+    "description": "A stronger Claude Code skill set for the Open Knowledge Format (OKF).",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "okf",
+      "source": "./okf-plugin",
+      "description": "Create, maintain, validate, migrate, and visualize OKF v0.1 bundles with a deterministic, zero-dependency validator that separates hard conformance errors from optional lint warnings."
+    }
+  ]
+}

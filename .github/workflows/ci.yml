@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The shipped tools are zero-dependency. PyYAML is installed ONLY so the dev
+      # equivalence test can prove the bundled parser agrees with a real YAML parser.
+      - name: Install dev deps
+        run: python -m pip install --upgrade pip pytest pyyaml
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q
+
+      # Prove the toolchain works with the standard library ALONE (no PyYAML present).
+      - name: Smoke test with stdlib only
+        run: |
+          pip uninstall -y pyyaml
+          python okf-plugin/scripts/okf.py validate examples/valid/acme-analytics --strict
+          python okf-plugin/scripts/okf.py validate examples/valid/permissive-quirks
+
+  conformance:
+    name: example bundle conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Golden bundle must pass --strict (warning-clean)
+        run: python okf-plugin/scripts/okf.py validate examples/valid/acme-analytics --strict
+
+      - name: Permissive-quirks bundle must be conformant (warnings allowed)
+        run: python okf-plugin/scripts/okf.py validate examples/valid/permissive-quirks
+
+      - name: Every invalid bundle must be rejected (negative corpus)
+        run: |
+          set -e
+          fail=0
+          for d in examples/invalid/*/; do
+            if python okf-plugin/scripts/okf.py validate "$d" >/dev/null; then
+              echo "ERROR: $d unexpectedly passed validation"; fail=1
+            else
+              echo "OK (rejected): $d"
+            fi
+          done
+          exit $fail
+
+      - name: Index generator is idempotent (round-trip on a generated bundle)
+        run: |
+          set -e
+          python okf-plugin/scripts/okf.py new bundle /tmp/kb --title "KB"
+          python okf-plugin/scripts/okf.py new concept t/a --bundle /tmp/kb --type Table --description d
+          python okf-plugin/scripts/okf.py index /tmp/kb --recursive --write
+          python okf-plugin/scripts/okf.py index /tmp/kb --recursive --check   # must be clean now
+
+      - name: Visualizer must render (graph smoke test)
+        run: |
+          python okf-plugin/scripts/okf.py graph examples/valid/acme-analytics -o /tmp/g.html
+          test -s /tmp/g.html
+          python okf-plugin/scripts/okf.py graph examples/valid/acme-analytics --format json > /tmp/g.json
+          python -c "import json; d=json.load(open('/tmp/g.json')); assert d['nodes'] and d['edges']"
+
+  manifests:
+    name: plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate plugin.json + marketplace.json
+        run: |
+          python -c "import json; json.load(open('okf-plugin/.claude-plugin/plugin.json'))"
+          python -c "import json; json.load(open('.claude-plugin/marketplace.json'))"

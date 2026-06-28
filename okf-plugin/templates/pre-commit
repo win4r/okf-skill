@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# OKF pre-commit hook — keeps an OKF bundle conformant and its indexes fresh on every commit.
+#
+# INSTALL (in YOUR repo that contains an OKF bundle):
+#   mkdir -p .githooks && cp this-file .githooks/pre-commit && chmod +x .githooks/pre-commit
+#   git config core.hooksPath .githooks
+#
+# CONFIGURE the two paths below (or export them in your environment):
+#   OKF_CLI    — path to okf.py (the plugin's scripts/okf.py)
+#   OKF_BUNDLE — path to your bundle root (default: repo root)
+#
+# Zero dependencies beyond Python 3.8+. Exits non-zero (blocking the commit) on any
+# conformance ERROR or stale index.
+set -euo pipefail
+
+OKF_CLI="${OKF_CLI:-okf.py}"                       # e.g. /path/to/okf-plugin/scripts/okf.py
+OKF_BUNDLE="${OKF_BUNDLE:-$(git rev-parse --show-toplevel)}"
+
+run() { python3 "$OKF_CLI" "$@"; }
+
+# 1. Hard conformance: fail the commit on any OKF ERROR (warnings are allowed).
+#    Drop --strict if you do NOT want warnings to block commits.
+run validate "$OKF_BUNDLE" --strict
+
+# 2. Indexes must be up to date (regenerate with: okf index <bundle> --recursive --write).
+run index "$OKF_BUNDLE" --recursive --check
+
+echo "pre-commit: OKF bundle is conformant and indexes are current ✓"

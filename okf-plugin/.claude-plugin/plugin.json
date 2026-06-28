@@ -1,0 +1,20 @@
+{
+  "name": "okf",
+  "description": "Create, maintain, validate, migrate, and visualize Open Knowledge Format (OKF) v0.1 bundles. Ships a deterministic, zero-dependency conformance validator that cleanly separates hard OKF errors from optional lint warnings.",
+  "version": "0.1.0",
+  "author": {
+    "name": "OKF-Skill contributors"
+  },
+  "homepage": "https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf",
+  "license": "Apache-2.0",
+  "keywords": [
+    "okf",
+    "open-knowledge-format",
+    "knowledge-bundle",
+    "llm-wiki",
+    "knowledge-catalog",
+    "markdown",
+    "yaml-frontmatter",
+    "validator"
+  ]
+}
