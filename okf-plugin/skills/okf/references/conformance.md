@@ -35,7 +35,7 @@ A bundle with any of these is **non-conformant**. Each maps to a §9 clause.
 | `E005` | `type-empty` | `type` is present but null, empty/whitespace-only, or not a scalar string. | §9 |
 | `E006` | `index-has-frontmatter` | A **non-root** `index.md` contains a frontmatter block (reserved files carry none). | §9 / §6 |
 | `E007` | `file-not-utf8` | A `.md` file is not decodable as UTF-8. | §3 |
-| `E008` | `log-date-not-iso` | A `log.md` `##` heading's **leading token** is date-shaped with a 4-digit year (e.g. `05/22/2026`) but not a valid `YYYY-MM-DD`. §7's explicit MUST, enforced via §9 rule 3 — the gap both reference skills left as a warning. A valid ISO date followed by a title (`## 2026-05-01 Sprint planning`) is **accepted**; numeric prose (`## 3-2-1 launch`) is ignored. | §9 / §7 |
+| `E008` | `log-date-not-iso` | A `log.md` `##` heading's **leading date-shaped token** (with a 4-digit year, e.g. `05/22/2026`) is not a valid `YYYY-MM-DD`. §7's explicit MUST, enforced via §9 rule 3 — the gap both reference skills left as a warning. A valid ISO date followed by a title separated by **whitespace or punctuation** (`## 2026-05-01 Sprint planning`, `## 2026-05-01: Release`) is **accepted**; numeric prose (`## 3-2-1 launch`) is ignored. | §9 / §7 |
 
 **Concept vs reserved.** `index.md` and `log.md` are reserved (never checked for `type`). Every
 other `.md` is a concept. **Default-ignored** repo housekeeping (not concepts): `README.md`,

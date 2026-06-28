@@ -140,10 +140,23 @@ def _unescape_double(s: str) -> str:
                 out.append(simple[nxt]); i += 2
             elif nxt == "x":
                 out.append(chr(int(s[i + 2:i + 4], 16))); i += 4
-            elif nxt == "u":
-                out.append(chr(int(s[i + 2:i + 6], 16))); i += 6
-            elif nxt == "U":
-                out.append(chr(int(s[i + 2:i + 10], 16))); i += 10
+            elif nxt in "uU":
+                width = 4 if nxt == "u" else 8
+                cp = int(s[i + 2:i + 2 + width], 16)
+                consumed = 2 + width
+                # Combine a UTF-16 surrogate PAIR (\uD800-\uDBFF followed by \uDC00-\uDFFF).
+                if 0xD800 <= cp <= 0xDBFF and s[i + consumed:i + consumed + 2] == "\\u":
+                    lo = int(s[i + consumed + 2:i + consumed + 6], 16)
+                    if 0xDC00 <= lo <= 0xDFFF:
+                        out.append(chr(0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)))
+                        i += consumed + 6
+                        continue
+                if 0xD800 <= cp <= 0xDFFF:
+                    # A lone surrogate is not UTF-8-encodable -> fail open, keep the escape literal
+                    # so downstream serializers (graph/index/context) never crash.
+                    out.append(s[i:i + consumed]); i += consumed
+                else:
+                    out.append(chr(cp)); i += consumed
             else:
                 out.append(nxt); i += 2
         except (ValueError, OverflowError):
@@ -189,20 +202,52 @@ def _flow_list(token: str) -> List[Any]:
 
 
 def _split_flow(inner: str) -> List[str]:
-    """Split a flow-sequence body on commas that are not inside quotes."""
-    out, buf, in_single, in_double = [], [], False, False
+    """Split a flow body on commas at depth 0 that are not inside quotes (so commas inside
+    a nested ``{...}`` / ``[...]`` are not treated as separators)."""
+    out, buf, in_single, in_double, depth = [], [], False, False, 0
     for ch in inner:
         if ch == "'" and not in_double:
             in_single = not in_single
         elif ch == '"' and not in_single:
             in_double = not in_double
-        if ch == "," and not in_single and not in_double:
+        elif not in_single and not in_double:
+            if ch in "[{":
+                depth += 1
+            elif ch in "]}":
+                depth = max(0, depth - 1)
+        if ch == "," and not in_single and not in_double and depth == 0:
             out.append("".join(buf))
             buf = []
         else:
             buf.append(ch)
     out.append("".join(buf))
     return [p for p in out]
+
+
+def _brace_balance(s: str) -> int:
+    """Net `{` minus `}` count outside quotes (used to gather a multi-line flow mapping)."""
+    depth, in_single, in_double = 0, False, False
+    for ch in s:
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+    return depth
+
+
+def _flow_value(val: str) -> Any:
+    """Parse a flow value: a nested list, a nested map, or a scalar."""
+    val = val.strip()
+    if val.startswith("[") and val.endswith("]"):
+        return _flow_list(val)
+    if val.startswith("{") and val.endswith("}"):
+        return dict(_flow_map_pairs(val))
+    return _scalar(val)
 
 
 def _flow_map_pairs(token: str):
@@ -218,7 +263,7 @@ def _flow_map_pairs(token: str):
             k = ps[:s].strip()
             if (k[:1] in "\"'") and k[-1:] == k[:1] and len(k) >= 2:
                 k = k[1:-1]
-            pairs.append((k, _scalar(ps[s + 1:].strip())))
+            pairs.append((k, _flow_value(ps[s + 1:].strip())))
     return pairs
 
 
@@ -290,6 +335,7 @@ def parse_yaml_mini(raw: str, _retry: bool = False) -> Tuple[Optional[Dict[str, 
     lines = raw.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     i, n = 0, len(lines)
     saw_content = False
+    saw_mapping = False  # recognized mapping syntax (a key, or a flow map even if empty)
     while i < n:
         rawline = lines[i]
         line = _strip_comment(rawline)
@@ -306,17 +352,25 @@ def parse_yaml_mini(raw: str, _retry: bool = False) -> Tuple[Optional[Dict[str, 
             # top-level sequence item -> not a mapping; skip (fail open)
             i += 1
             continue
-        if stripped.startswith("{") and stripped.endswith("}"):
-            # whole-document flow mapping, e.g. {type: Dataset, title: Foo}
-            for k, v in _flow_map_pairs(stripped):
+        if stripped.startswith("{"):
+            # whole-document flow mapping (possibly split across lines), e.g.
+            # {type: Dataset, title: Foo}  or  {type: Table,\n title: Foo}
+            saw_mapping = True
+            buf = stripped
+            j = i
+            while _brace_balance(buf) > 0 and j + 1 < n:
+                j += 1
+                buf += " " + _strip_comment(lines[j]).strip()
+            for k, v in _flow_map_pairs(buf):
                 result[k] = v
-            i += 1
+            i = j + 1
             continue
         sep = _find_key_sep(stripped)
         if sep < 0:
             # bare scalar line at top level -> not a key; skip (fail open)
             i += 1
             continue
+        saw_mapping = True
         key = stripped[:sep].strip()
         if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
             key = key[1:-1]
@@ -362,7 +416,7 @@ def parse_yaml_mini(raw: str, _retry: bool = False) -> Tuple[Optional[Dict[str, 
             result[key] = _scalar(value_part)
             i += 1
 
-    if saw_content and not result:
+    if saw_content and not result and not saw_mapping:
         # Fail open on a uniformly space/tab-indented top-level mapping (valid YAML):
         # dedent by the common indent and retry once before declaring "not a mapping".
         nonblank = [ln for ln in lines if ln.strip()]
@@ -530,3 +584,49 @@ def is_iso8601(value: Any) -> bool:
 
 def is_iso_date(value: Any) -> bool:
     return isinstance(value, str) and bool(ISO_DATE_RE.match(value.strip()))
+
+
+# --------------------------------------------------------------------------- #
+# Frontmatter serialization (shared by okf_new and okf_migrate so producer output is
+# round-trip-safe: a value never re-parses to a different value/type than intended).
+# --------------------------------------------------------------------------- #
+# YAML 1.1 implicit boolean/null tokens — PyYAML resolves these to bool/None, so a string
+# that looks like one must be quoted to stay a string for any consumer.
+_YAML_BOOLISH = {"true", "false", "yes", "no", "on", "off", "y", "n", "null", "none", "~"}
+
+
+def emit_scalar(value: Any, in_flow: bool = False) -> str:
+    """Serialize a scalar for frontmatter, quoting whenever bare YAML would be re-typed."""
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if not isinstance(value, str):
+        return str(value)
+    needs = (
+        value == ""
+        or value.strip() != value
+        or value[:1] in "[{!&*#?|>@`\"'%,-"
+        or ": " in value
+        or " #" in value
+        or value.lower() in _YAML_BOOLISH
+        or _scalar(value) != value                       # numeric-looking -> would re-type
+        or (in_flow and any(c in value for c in ",[]{}"))  # flow-list/map separators
+    )
+    if needs:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return value
+
+
+def emit_fm(key: str, value: Any) -> List[str]:
+    """Emit one frontmatter key as one or more lines (block scalar for multi-line strings)."""
+    if isinstance(value, list):
+        return ["%s: [%s]" % (key, ", ".join(emit_scalar(x, in_flow=True) for x in value))]
+    if isinstance(value, str) and "\n" in value:
+        out = ["%s: |" % key]
+        for ln in value.split("\n"):
+            out.append(("  " + ln) if ln else "")
+        return out
+    return ["%s: %s" % (key, emit_scalar(value))]

@@ -130,12 +130,28 @@ def _collect_slugmap(src: str) -> Dict[str, str]:
 CODE_SPAN_RE = re.compile(r"(`+)(?:.*?)\1")
 
 
+def _escaped(line: str, idx: int) -> bool:
+    """True if the char at idx is preceded by an odd number of backslashes (CommonMark escape)."""
+    bs = 0
+    j = idx - 1
+    while j >= 0 and line[j] == "\\":
+        bs += 1
+        j -= 1
+    return bs % 2 == 1
+
+
 def _sub_outside_code(line: str, subfn) -> str:
-    """Apply subfn to the parts of `line` that are NOT inside an inline code span (`...`)."""
+    """Apply subfn to the parts of `line` that are NOT inside an inline code span (`...`).
+
+    A backtick run escaped by a backslash (``\\``) is literal text per CommonMark, so it does
+    not open a code span and its content is still converted.
+    """
     out, pos = [], 0
     for m in CODE_SPAN_RE.finditer(line):
+        if m.start() < pos or _escaped(line, m.start()):
+            continue  # overlaps an emitted span, or the opening backtick is escaped -> not a span
         out.append(subfn(line[pos:m.start()]))
-        out.append(m.group(0))  # code span kept verbatim
+        out.append(m.group(0))  # genuine code span kept verbatim
         pos = m.end()
     out.append(subfn(line[pos:]))
     return "".join(out)
@@ -211,51 +227,15 @@ def transform_file(src_path: str, rel: str, slugmap: Dict[str, str], default_typ
 
     body = convert_wikilinks(body, slugmap, report)
 
-    # render frontmatter deterministically (preferred field order first), round-trip-safe
+    # render frontmatter deterministically (preferred field order first) via the shared
+    # round-trip-safe emitter (quotes numeric/bool-looking strings, comma-bearing list items).
     order = ["type", "title", "description", "resource", "tags", "timestamp"]
     keys = [k for k in order if k in fm] + [k for k in fm if k not in order]
     fm_lines = []
     for k in keys:
-        fm_lines.extend(_emit_fm(k, fm[k]))
+        fm_lines.extend(core.emit_fm(k, fm[k]))
     content = "---\n" + "\n".join(fm_lines) + "\n---\n" + (body if body.startswith("\n") else "\n" + body)
     return content.rstrip() + "\n", report
-
-
-_NEEDS_QUOTE = (": ", " #")
-
-
-def _emit_scalar(v) -> str:
-    """Inline-emit a scalar, quoting when bare YAML would be misread or re-typed."""
-    if v is None:
-        return "null"
-    if v is True:
-        return "true"
-    if v is False:
-        return "false"
-    if not isinstance(v, str):
-        return str(v)
-    needs = (
-        v == ""
-        or v.strip() != v
-        or v[:1] in "[{!&*#?|>@`\"'%,-"
-        or any(tok in v for tok in _NEEDS_QUOTE)
-        or v.lower() in ("null", "true", "false", "yes", "no", "~")
-    )
-    if needs:
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return v
-
-
-def _emit_fm(k: str, v) -> List[str]:
-    """Emit one frontmatter key as one or more lines (block scalar for multi-line strings)."""
-    if isinstance(v, list):
-        return ["%s: [%s]" % (k, ", ".join(_emit_scalar(x) for x in v))]
-    if isinstance(v, str) and "\n" in v:
-        out = ["%s: |" % k]
-        for ln in v.split("\n"):
-            out.append(("  " + ln) if ln else "")
-        return out
-    return ["%s: %s" % (k, _emit_scalar(v))]
 
 
 def run(args) -> int:
@@ -304,6 +284,10 @@ def run(args) -> int:
                 if fn.endswith(".md") and fn not in ("index.md", "log.md"):
                     continue  # concepts are written by the transform loop below
                 s = os.path.join(dirpath, fn)
+                # Never dereference a symlink whose target escapes the source bundle (exfil guard,
+                # consistent with load_bundle): copying it would bake external content into the output.
+                if os.path.islink(s) and not core.is_within(s, src):
+                    continue
                 rel = os.path.relpath(s, src)
                 d = os.path.join(out_root, rel)
                 os.makedirs(os.path.dirname(d), exist_ok=True)

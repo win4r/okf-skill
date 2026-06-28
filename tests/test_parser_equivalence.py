@@ -40,6 +40,15 @@ CORPUS = [
     "  type: Table\n  title: Orders\n  count: 2",
     # block scalar value
     "type: Note\nbody: |\n  line one\n  line two",
+    # non-BMP \\U escape — the form yaml.safe_dump actually emits for an emoji (allow_unicode=False).
+    # (A hand-written \\uD83D\\uDE00 surrogate PAIR is NOT real-bundle content — safe_dump never
+    # emits it, and PyYAML decodes it to un-encodable lone surrogates — so it is excluded here and
+    # covered instead by the mini-specific regression test test_r2_1_surrogate_pair_combines.)
+    'type: "\\U0001F600"\nname: GA',
+    # flow map with a nested flow list and nested flow map
+    "{type: T, tags: [a, b], meta: {x: 1}}",
+    # multi-line flow mapping
+    "{type: Table,\n title: Foo}",
 ]
 
 

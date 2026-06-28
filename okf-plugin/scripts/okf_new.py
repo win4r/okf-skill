@@ -9,6 +9,8 @@ import os
 import sys
 from datetime import datetime, timezone
 
+import okf_core as core
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -45,26 +47,27 @@ def new_concept(bundle: str, concept_id: str, ctype: str, title: str,
         print("okf new: --type is required and must be non-empty", file=sys.stderr)
         return 2
     rel = concept_id if concept_id.endswith(".md") else concept_id + ".md"
-    if os.path.isabs(rel) or os.path.relpath(os.path.normpath(os.path.join(bundle, rel)),
-                                             os.path.abspath(bundle)).startswith(os.pardir):
+    dest = os.path.join(bundle, rel)
+    # Containment (realpath-based, consistent with okf_index): reject absolute ids or any id
+    # that resolves outside the bundle root (incl. through a pre-existing escaping symlink).
+    if os.path.isabs(rel) or not core.is_within(dest, bundle):
         print("okf new: concept id must stay inside the bundle (no absolute paths or '..'): %s"
               % concept_id, file=sys.stderr)
         return 2
-    dest = os.path.join(bundle, rel)
     if os.path.exists(dest):
         print(f"okf new: concept already exists: {dest}", file=sys.stderr)
         return 2
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
 
-    fm = [f"type: {ctype}"]
-    fm.append(f"title: {title or _derive_title(concept_id)}")
+    fm = list(core.emit_fm("type", ctype))
+    fm.extend(core.emit_fm("title", title or _derive_title(concept_id)))
     if description:
-        fm.append(f"description: {description}")
+        fm.extend(core.emit_fm("description", description))
     if resource:
-        fm.append(f"resource: {resource}")
+        fm.extend(core.emit_fm("resource", resource))
     if tags:
-        fm.append("tags: [" + ", ".join(tags) + "]")
-    fm.append(f"timestamp: {_now_iso()}")
+        fm.extend(core.emit_fm("tags", tags))
+    fm.extend(core.emit_fm("timestamp", _now_iso()))
 
     body = ["", "# Overview", "", description or "_Describe this concept._", ""]
     if schema:

@@ -280,12 +280,14 @@ def _check_log(doc, res):
         if not m:
             continue
         heading = m.group(1).strip()
-        # Examine only the LEADING token: '## 2026-05-01 Sprint planning' is a valid ISO
-        # date entry with an annotation (a mainstream changelog style) and must be accepted.
-        first = heading.split()[0] if heading.split() else ""
-        if core.is_iso_date(first):
-            dates.append(first)
-        elif DATEISH_RE.match(first) and re.search(r"\d{4}", first):
+        # Examine the date-SHAPED leading token, so any annotation separated by whitespace OR
+        # punctuation is excluded: '## 2026-05-01 Sprint planning' and '## 2026-05-01: Release'
+        # are valid ISO-date entries (mainstream changelog styles) and must be accepted.
+        m_date = DATEISH_RE.match(heading)
+        token = m_date.group(0) if m_date else ""
+        if token and core.is_iso_date(token):
+            dates.append(token)
+        elif token and re.search(r"\d{4}", token):
             # §7: log date headings MUST use ISO 8601 -> §9.3 conformance error (E008). The
             # 4-digit-year requirement avoids false-flagging numeric prose like '## 3-2-1 launch'.
             add(Finding("error", "E008", "log-date-not-iso", doc.rel_path,
